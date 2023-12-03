@@ -1,12 +1,25 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
 #include <signal.h>
-#include <errno.h>
+#include <time.h>
+
+
+struct pipe_data {
+    char szolofajta[50];
+    int mennyiseg;
+};
+
+const char * acceptedTypes[] =  {
+    "Irsai",
+    "Otellou",
+    "Szurkebarat"
+};
+
+const int idealWeight = 500;
+
 
 struct Szallitmany {
     int ID;
@@ -110,6 +123,17 @@ void listFilteredDb(struct Szallitmany *db, int size) {
 
 }
 
+int isInAccepted(const char* tested) {
+    for(int i = 0; i < 3; i++) {
+        if(strcmp(tested, acceptedTypes[i]) == 0) {
+            return 1;
+        }
+    }
+    printf("szolofajta nem talalhato az elfogadottak listajan...\n");
+    printf("elfogadott tipusok: Irsai, Otellou, Szurkebarat\n");
+    return 0;
+}
+
 
 struct Szallitmany insertInDb(struct Szallitmany *db, int size) {
     system("clear");
@@ -127,11 +151,11 @@ struct Szallitmany insertInDb(struct Szallitmany *db, int size) {
     printf("\nmennyiseg (kg): ");
     scanf("%d", &inserted.mennyiseg);
     getchar();
-    printf("\nszolofajta: ");
-    scanf("%s", inserted.szolofajta);
-    getchar();
-
-    printOne(inserted);
+    do {
+        printf("\nszolofajta: ");
+        scanf("%s", inserted.szolofajta);
+        getchar();
+    } while (!isInAccepted(inserted.szolofajta));
     return inserted;
 }
 
@@ -183,10 +207,12 @@ void editInDb(struct Szallitmany *db, int size) {
                     getchar();
                     break;
                 case 4:
-                    printf("\nuj adat: ");
-                    fgets(db[i].szolofajta, sizeof(db[i].szolofajta), stdin);
-                    db[i].szolofajta[strcspn(db[i].szolofajta, "\n")] = 0;
-                    break;
+                    do {
+                        printf("\nuj adat: ");
+                        fgets(db[i].szolofajta, sizeof(db[i].szolofajta), stdin);
+                        db[i].szolofajta[strcspn(db[i].szolofajta, "\n")] = 0;
+                        break;
+                    } while(!isInAccepted(db[i].szolofajta));
                 default:
                     printf("helytelen mezo. Visszairanyitas a menube...");
                     system("clear");
@@ -213,148 +239,226 @@ int dbToFile(struct Szallitmany *db, int size) {
     
 }
 
+void sumByType(struct pipe_data * ret, struct Szallitmany * db, int size) {
+    strcpy(ret[0].szolofajta, "Irsai");
+    strcpy(ret[1].szolofajta, "Otellou");
+    strcpy(ret[2].szolofajta, "Szurkebarat");
 
-int main() {
-    int pid, fd, fd2;
-
-    char pipename[30];
-    char processed_pipe[30];
-    sprintf(pipename,"/tmp/%d",getpid());
-    sprintf(processed_pipe, "/tmp/%d",getpid() * 2);
-    int fid = mkfifo(pipename, S_IRUSR|S_IWUSR);
-    int fid2 = mkfifo(processed_pipe, S_IRUSR|S_IWUSR);
-
-    if(fid == -1 || fid2 == -1) {
-        printf("error_no: %i", errno);
-        perror("hiba lepett fel vmelyik pipe nyitasa soran\n");
-        exit(EXIT_FAILURE);
+    for(int i = 0; i < 3; i++) {
+        ret[i].mennyiseg = 0;
     }
 
+    for(int i = 0; i < size; i++) {
+        if(strcmp(db[i].szolofajta, "Irsai") == 0)
+            ret[0].mennyiseg += db[i].mennyiseg;
+        else if(strcmp(db[i].szolofajta, "Otellou") == 0)
+            ret[1].mennyiseg += db[i].mennyiseg;
+        else
+            ret[2].mennyiseg += db[i].mennyiseg;
+    }
+}
 
-    if (pid > 0) {  // parent - sends
 
-        struct Szallitmany db[100];
-        FILE *f = fopen("./szolo.dat", "r");
-        if( f == NULL) {
-            printf("failed to open file");
-            exit(EXIT_FAILURE);
-        }
-        
-        char ch;
-        char buffer[50];
-        memset(buffer, 0, sizeof(buffer));
-        int state = 0;
-        int size = 0;
-        do {
-            ch = fgetc(f);
-            if( ch == '\n') { continue; }
-            if(ch == ';') {
-                switch (state) {
-                    case 0:
-                        db[size].ID = size;
-                        strcpy(db[size].borvidek, buffer);
-                        state++;
-                        break;
-                    case 1:
-                        strcpy(db[size].termelo, buffer);
-                        state++;
-                        break;
-                    case 2:
-                        db[size].mennyiseg = atoi(buffer);
-                        state++;
-                        break;
-                    case 3:
-                        strcpy(db[size].szolofajta, buffer);
-                        state = 0;
-                        size++;
-                        break;
-                    default:
-                        break;
-                }
-                memset(buffer, 0, sizeof(buffer));
-            }
-            else {
-                buffer[strlen(buffer)] = ch;
-                buffer[strlen(buffer) + 1] = '\0';
-            }
+void processSzolo(struct Szallitmany * db, int size) {
+    system("clear"); 
+    struct pipe_data summedByType[3];
+    sumByType(summedByType, db, size);
 
-        } while ( ch != EOF);
-        fclose(f);
+    if( summedByType[0].mennyiseg >= idealWeight ||
+    summedByType[1].mennyiseg >= idealWeight ||
+    summedByType[2].mennyiseg >= idealWeight) {
 
-        int input = 1;
-        while (input != 0) {
-            printf("1. teljes adatbazis listazasa\n");
-            printf("2. szures es listazas\n");        
-            printf("3. hozzaadas adatbazishoz\n");
-            printf("4. torles adatbazisbol\n");
-            printf("5. szallitmany modositasa\n");
-            printf("6. szolo feldolgozasa\n");
-            printf("0. program bezarasa\n");
-            scanf("%d", &input);
-            switch(input) {
+    
+    pid_t pid;
+    int pipefd[2];
+    int pipe2fd[2];
+    if( pipe(pipefd) == -1 || pipe(pipe2fd) == -1 ) {
+    perror("hiba a pipe nyitasakor\n");
+    exit(EXIT_FAILURE);
+    }
+    pid = fork();
+    if( pid == -1 ) {
+    perror("fork error..\n");
+    exit(EXIT_FAILURE);
+    }
+
+    if(pid == 0) {
+    //child prcss
+    srand (time ( NULL));
+            
+    // ready to read pipe 
+    kill(getppid(), SIGUSR1);
+    int size_of_toProcess;
+    read(pipefd[0], &size_of_toProcess, sizeof(int));
+    struct pipe_data to_process[size_of_toProcess];
+
+    sleep(1);
+    close(pipefd[1]);
+    for(int i = 0; i < size_of_toProcess; i++) { 
+    read(pipefd[0], &to_process[i], sizeof(struct pipe_data));
+    }
+    close(pipefd[0]);
+
+    // started processing
+    kill(getppid(), SIGUSR2);
+
+    unsigned int waitTime = 1 + (rand() % 2);
+    sleep(waitTime);
+
+    // actual processing
+    double lpkg = 0.6 + (rand() / (RAND_MAX / 0.2));
+    int summed_kg = 0;
+    for (int i = 0; i < size_of_toProcess; i++) 
+    summed_kg += to_process[i].mennyiseg;
+    int summed_l = summed_kg * lpkg; 
+
+    close(pipe2fd[0]);
+    char answer_buffer[150];
+    sprintf(answer_buffer, "szolo megviszgalva. Minoseg alapjan %f l/kg kozotti bor varhato.\nMegadott mennyisegbol (%d kg) osszesen %d l fog eloallni\n", lpkg, summed_kg, summed_l); 
+    write(pipe2fd[1], answer_buffer, sizeof(answer_buffer));
+    close(pipe2fd[1]);
+    exit(EXIT_SUCCESS);
+    }
+    else {
+    // never use these in parent
+    close(pipefd[0]);
+    close(pipe2fd[1]);
+
+    struct pipe_data to_send[3];
+    int to_send_len = 0;
+    for(int i = 0; i < 3; i++) {
+    if(summedByType[i].mennyiseg >= idealWeight) {
+    to_send[to_send_len].mennyiseg = summedByType[i].mennyiseg;
+    strcpy(to_send[to_send_len].szolofajta, summedByType[i].szolofajta);
+    to_send_len++;
+    }
+    } 
+    write(pipefd[1], &to_send_len, sizeof(int));
+
+    // wait for child to read
+    pause();
+    for(int i = 0; i < to_send_len; i++) {
+    write(pipefd[1], &to_send[i], sizeof(struct pipe_data));
+    //printf("k: %s : %d\n", summedByType[i].szolofajta, summedByType[i].mennyiseg);
+    }
+                
+    // receive prompt abt processing
+    pause(); 
+
+    char pipe_buffer[150]; 
+
+    read(pipe2fd[0], pipe_buffer, sizeof(pipe_buffer));
+    printf("%s", pipe_buffer);
+    close(pipefd[1]);
+    close(pipe2fd[0]);
+    }
+
+    fflush(NULL);
+    } 
+    else {
+    printf("egyik szolofajtabol sincsen elegendo mennyiseg\n");
+    }
+}
+
+
+void handler_ready_to_receive() {
+    printf("SIGNAL: gyerek kesz az olvasasra\n");
+}
+
+void handler_processing() {
+    printf("SIGNAL: gyerek feldolgozza a kapott adatokat..\n");
+}
+
+int main() {
+
+    signal(SIGUSR1, handler_ready_to_receive);
+    signal(SIGUSR2, handler_processing);
+
+    struct Szallitmany db[100];
+    FILE *f = fopen("./szolo.dat", "r");
+    if( f == NULL) {
+        printf("failed to open file");
+        return 1;
+    }
+
+    char ch;
+    char buffer[50];
+    memset(buffer, 0, sizeof(buffer));
+    int state = 0;
+    int size = 0;
+    do {
+        ch = fgetc(f);
+        if( ch == '\n') { continue; }
+        if(ch == ';') {
+            switch (state) {
+                case 0:
+                    db[size].ID = size;
+                    strcpy(db[size].borvidek, buffer);
+                    state++;
+                    break;
                 case 1:
-                    system("clear");
-                    listDb(db, size);
+                    strcpy(db[size].termelo, buffer);
+                    state++;
                     break;
                 case 2:
-                    listFilteredDb(db, size);
+                    db[size].mennyiseg = atoi(buffer);
+                    state++;
                     break;
                 case 3:
-                    db[size] = insertInDb(db, size);
+                    strcpy(db[size].szolofajta, buffer);
+                    state = 0;
                     size++;
                     break;
-                case 4:
-                    deleteFromDb(db, size);
-                    size--;
-                    break;
-                case 5:
-                    editInDb(db, size);
-                    break;
-                case 6:
-                    pid = fork();
-                    fd = open(pipename, O_WRONLY);
-                    /*struct pipeData temp;
-
-                    //wait for signal1 b4 sending
-                    for(int i = 0; i < size; i++) {
-                        write(fd, temp);
-                    }*/
-                    //signal2: child started processing
-                    close(fd);
-
-                    char receive_buffer[1024];
-                    fd2 = open(processed_pipe, O_RDONLY);
-                    read(fd, receive_buffer, sizeof(receive_buffer));
-                    printf("%s", receive_buffer);
-                    break;
-                case 0:
-                    dbToFile(db, size); 
                 default:
                     break;
             }
+            memset(buffer, 0, sizeof(buffer));
         }
-    }
-    else { // child - receives
-        // prepare for receiving
+        else {
+            buffer[strlen(buffer)] = ch;
+            buffer[strlen(buffer) + 1] = '\0';
+        }
 
-        // send signal that child is ready
-        kill(getppid(), SIGUSR1);
+    } while ( ch != EOF);
+    fclose(f);
 
-        // receive data
-        fd = open(pipename, O_RDONLY);
-            // other code
-        close(fd);
-
-        // process data and send sig to parent
-        kill(getppid(), SIGUSR2);
-        sleep(1); // TODO: SET TO 5-10
-            // other code 
-        // send back string through pipe
-        char send_buffer[200]; 
-            // calculate exact data 4 string
-        fd2 = open(processed_pipe, O_WRONLY);
-        write(processed_pipe, send_buffer, strlen(send_buffer + 1));
-        close(fd2); 
+    int input = 1;
+    while (input != 0) {
+        printf("1. teljes adatbazis listazasa\n");
+        printf("2. szures es listazas\n");        
+        printf("3. hozzaadas adatbazishoz\n");
+        printf("4. torles adatbazisbol\n");
+        printf("5. szallitmany modositasa\n");
+        printf("6. keszlet feldolgozasa\n");
+        printf("0. program bezarasa\n");
+        scanf("%d", &input);
+        switch(input) {
+            case 1:
+                system("clear");
+                listDb(db, size);
+                break;
+            case 2:
+                listFilteredDb(db, size);
+                break;
+            case 3:
+                db[size] = insertInDb(db, size);
+                size++;
+                break;
+            case 4:
+                deleteFromDb(db, size);
+                size--;
+                break;
+            case 5:
+                editInDb(db, size);
+                break;
+            case 6:
+                processSzolo(db, size);
+                break;
+            case 0:
+                dbToFile(db, size); 
+            default:
+                break;
+        }
     }
     return 0;
 }
